@@ -331,50 +331,6 @@
           });
         }
       });
-            // --------------------------------------------------
-      // Mobile-Fallback: Auf Handy ohne VR -> movement-controls statt Ammo-Rig
-      // --------------------------------------------------
-      AFRAME.registerComponent("mobile-fallback-movement", {
-        init: function () {
-          // Sicherheitscheck
-          if (!AFRAME.utils || !AFRAME.utils.device) return;
-
-          // Nur auf Mobile-Browsern aktiv
-          if (!AFRAME.utils.device.isMobile()) {
-            console.log("[MOBILE-FALLBACK] Nicht mobile -> Physik bleibt aktiv");
-            return;
-          }
-
-          console.log("[MOBILE-FALLBACK] Mobile erkannt -> aktiviere movement-controls");
-
-          // Physik-Lokomotion für Mobile deaktivieren
-          if (this.el.hasAttribute("player-physics-controls")) {
-            this.el.removeAttribute("player-physics-controls");
-          }
-          if (this.el.hasAttribute("ammo-body")) {
-            this.el.removeAttribute("ammo-body");
-          }
-          if (this.el.hasAttribute("ammo-shape")) {
-            this.el.removeAttribute("ammo-shape");
-          }
-
-          // Einfaches Movement aktivieren (aus aframe-extras)
-          // constrainToNavMesh: true kannst du setzen, wenn du ein NavMesh nutzen willst
-          this.el.setAttribute(
-            "movement-controls",
-            "constrainToNavMesh: false; speed: 0.15"
-          );
-
-          // Optional noch wasd-controls (falls externe Tastatur dran hängt)
-          this.el.setAttribute("wasd-controls", "acceleration: 20");
-
-          // Startposition etwas sinnvoll setzen
-          if (!this.el.getAttribute("position")) {
-            this.el.setAttribute("position", "0 1.6 0");
-          }
-        }
-      });
-
     </script>
   </head>
 
@@ -462,7 +418,6 @@
         ammo-shape="type: capsule; fit: manual; halfExtents: 0.3 1 0.3"
         collision-listener
         player-physics-controls="speed: 5; controller: #ctlL"
-        mobile-fallback-movement
         position="0 2 20"
         rotation="0 0 0"
       >
