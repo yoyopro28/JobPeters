@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>A-Frame Ammo + GLB Collision Demo</title>
+
+    <script src="https://aframe.io/releases/1.3.0/aframe.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/MozillaReality/ammo.js@8bbc0ea/builds/ammo.wasm.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-physics-system@v4.2.4/dist/aframe-physics-system.js"></script>
+
+<script>
+  AFRAME.registerComponent("collision-listener", {
+    init: function () {
+      this.el.addEventListener("collidestart", (e) => {
+        console.log(
+          "[COLLISION START]",
+          this.el.id || this.el.tagName,
+          "mit",
+          e.detail.targetEl &&
+            (e.detail.targetEl.id || e.detail.targetEl.tagName)
+        );
+      });
+    }
+  });
+
+  // skaliert Geometrie + baut Mesh-Collider
+  AFRAME.registerComponent("model-mesh-collider", {
+    schema: { scale: { default: 15 } },
+    init: function () {
+      this.el.addEventListener("model-loaded", () => {
+        const s = this.data.scale;
+        const mesh = this.el.getObject3D("mesh");
+        if (!mesh) return;
+
+        mesh.traverse((node) => {
+          if (node.isMesh && node.geometry) {
+            node.geometry.scale(s, s, s);
+          }
+        });
+
+        this.el.setAttribute("ammo-body", { type: "static" });
+        this.el.setAttribute("ammo-shape", {
+          type: "mesh",
+          fit: "all"
+        });
+
+        console.log(
+          "[COLLIDER] static mesh auf Modell gesetzt (scale " + s + ")"
+        );
+      });
+    }
+  });
+
+  // WASD-Steuerung relativ zur Blickrichtung (Kamera)
+  AFRAME.registerComponent("player-physics-controls", {
+    schema: {
+      speed: { default: 5 }
+    },
+
+    init: function () {
+      this.keys = {};
+      this.direction = new THREE.Vector3();
+      this.forward = new THREE.Vector3();
+      this.right = new THREE.Vector3();
+      this.up = new THREE.Vector3(0, 1, 0);
+
+      // Kamera-Entity merken (Child mit [camera])
+      this.cameraEl =
+        this.el.querySelector("[camera]") ||
+        (this.el.sceneEl && this.el.sceneEl.camera && this.el.sceneEl.camera.el);
+
+      window.addEventListener("keydown", (e) => {
+        this.keys[e.code] = true;
+      });
+      window.addEventListener("keyup", (e) => {
+        this.keys[e.code] = false;
+      });
+    },
+
+    tick: function () {
+      const body = this.el.body;
+      if (!body) return; // body noch nicht geladen
+
+      const moveX =
+        (this.keys["KeyD"] || this.keys["ArrowRight"] ? 1 : 0) +
+        (this.keys["KeyA"] || this.keys["ArrowLeft"] ? -1 : 0);
+      const moveZ =
+        (this.keys["KeyS"] || this.keys["ArrowDown"] ? 1 : 0) +
+        (this.keys["KeyW"] || this.keys["ArrowUp"] ? -1 : 0);
+
+      // aktuelle vertikale Geschwindigkeit beibehalten (Gravitation / Fallen)
+      const currentVel = body.getLinearVelocity();
+      const vy = currentVel.y();
+
+      if (!moveX && !moveZ) {
+        // stehen bleiben (nur y beibehalten)
+        const newVelIdle = new Ammo.btVector3(0, vy, 0);
+        body.setLinearVelocity(newVelIdle);
+        Ammo.destroy(newVelIdle);
+        return;
+      }
+
+      // Forward aus Kamerablickrichtung holen (nicht aus Rig-Rotation)
+      if (this.cameraEl && this.cameraEl.object3D) {
+        this.cameraEl.object3D.getWorldDirection(this.forward);
+      } else {
+        // Fallback: alte Variante über Rig-Yaw
+        const rotation = this.el.getAttribute("rotation") || {
+          x: 0,
+          y: 0,
+          z: 0
+        };
+        const yaw = THREE.MathUtils.degToRad(rotation.y);
+        this.forward
+          .set(0, 0, -1)
+          .applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+      }
+
+      // nur horizontale Richtung verwenden
+      this.forward.y = 0;
+      if (this.forward.lengthSq() > 0) {
+        this.forward.normalize();
+      }
+
+      // Right-Vektor aus Forward × Up
+      this.right.copy(this.forward).cross(this.up).negate().normalize();
+
+      // Bewegungsrichtung in Weltkoordinaten
+      this.direction.set(0, 0, 0);
+      this.direction
+        .addScaledVector(this.forward, moveZ)
+        .addScaledVector(this.right, moveX);
+
+      if (this.direction.lengthSq() > 0) {
+        this.direction.normalize();
+      }
+
+      const speed = this.data.speed;
+      const vx = this.direction.x * speed;
+      const vz = this.direction.z * speed;
+
+      const newVel = new Ammo.btVector3(vx, vy, vz);
+      body.setLinearVelocity(newVel);
+      Ammo.destroy(newVel);
+    }
+  });
+</script>
+
+  </head>
+
+  <body>
+    <a-scene
+      physics="driver: ammo; debug: true; debugDrawMode: 1;"
+      background="color: #88a"
+    >
+      <a-assets>
+        <a-asset-item id="modell" src="model-6.glb"></a-asset-item>
+      </a-assets>
+
+      <!-- Boden -->
+      <a-plane
+        ammo-body="type: static"
+        ammo-shape="type: box"
+        position="0 0 0"
+        rotation="-90 0 0"
+        width="40"
+        height="40"
+        color="#7BC8A4"
+      ></a-plane>
+
+      <!-- GLB + echter Mesh-Collider -->
+      <a-entity
+        id="level"
+        gltf-model="#modell"
+        position="0 0 0"
+        model-mesh-collider="scale: 15"
+      ></a-entity>
+
+      <!-- Spieler-Rig: jetzt DYNAMIC + Capsule-Collider + eigene Physiksteuerung -->
+      <a-entity
+        id="rig"
+        ammo-body="type: dynamic; mass: 1; angularFactor: 0 0 0; linearDamping: 0.2; emitCollisionEvents: true"
+        ammo-shape="type: capsule; fit: manual; halfExtents: 0.3 1 0.3"
+        collision-listener
+        player-physics-controls="speed: 5"
+        position="0 1 10"
+      >
+        <!-- Kamera sitzt im Collider -->
+        <a-entity
+          camera
+          position="0 0.6 0"
+          look-controls
+        ></a-entity>
+      </a-entity>
+    </a-scene>
+  </body>
+</html>

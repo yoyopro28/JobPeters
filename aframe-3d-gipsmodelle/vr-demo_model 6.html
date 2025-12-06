@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>A-Frame VR Szene Debug</title>
+
+    <script src="https://aframe.io/releases/1.3.0/aframe.min.js"></script>
+    <script src="https://rawgit.com/fernandojsg/aframe-teleport-controls/master/dist/aframe-teleport-controls.min.js"></script>
+    <script src="https://cdn.rawgit.com/donmccurdy/aframe-physics-system/v3.3.0/dist/aframe-physics-system.min.js"></script>
+    <script src="https://recast-api.donmccurdy.com/aframe-inspector-plugin-recast.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/donmccurdy/aframe-extras@v6.1.1/dist/aframe-extras.min.js"></script>
+    <script src="https://unpkg.com/aframe-environment-component@1.3.1/dist/aframe-environment-component.min.js"></script>
+
+    <script>
+      // X-Button → Teleportstart/-ende
+      AFRAME.registerComponent("input-listen", {
+        init: function () {
+          this.el.addEventListener("xbuttondown", function () {
+            this.emit("teleportstart");
+          });
+
+          this.el.addEventListener("xbuttonup", function () {
+            this.emit("teleportend");
+          });
+        }
+      });
+
+      // --- Jump-Controls: interne "Fake"-Physik (ohne global gravity) ---
+      AFRAME.registerComponent("jump-controls", {
+        schema: {
+          height:  { default: 0.2 },   // Sprunghöhe
+          gravity: { default: -9.8 }   // "Schwerkraft" nur für den Jump
+        },
+        init: function () {
+          this.jumping   = false;
+          this.startY    = 0;
+          this.velocityY = 0;
+          this.rig       = document.querySelector("#cameraRig");
+
+          this.onJump = this.onJump.bind(this);
+
+          // A-Button (Controller)
+          this.el.addEventListener("abuttondown", this.onJump);
+
+          // Space (Keyboard)
+          window.addEventListener("keydown", (e) => {
+            if (e.code === "Space") this.onJump();
+          });
+        },
+        onJump: function () {
+          if (this.jumping || !this.rig) return;
+
+          this.jumping = true;
+          this.startY  = this.rig.object3D.position.y;
+
+          const g = this.data.gravity || -9.8;
+          const h = this.data.height;
+
+          // v0 = sqrt(2 * |g| * h)
+          this.velocityY = Math.sqrt(2 * Math.abs(g) * h);
+        },
+        tick: function (time, dt) {
+          if (!this.jumping || !this.rig || !dt) return;
+
+          const dtSec = dt / 1000;
+          const g = this.data.gravity || -9.8;
+
+          this.velocityY += g * dtSec;
+
+          const pos = this.rig.object3D.position;
+          pos.y += this.velocityY * dtSec;
+
+          if (pos.y <= this.startY) {
+            pos.y = this.startY;
+            this.jumping   = false;
+            this.velocityY = 0;
+          }
+        }
+      });
+
+      // --- Modus: Walk (NavMesh) <-> Fly ---
+      AFRAME.registerComponent("locomotion-mode-toggle", {
+        schema: { fly: { default: false } },
+        init: function () {
+          this.rig = document.querySelector("#cameraRig");
+          this.onToggle = this.onToggle.bind(this);
+
+          this.el.addEventListener("ybuttondown", this.onToggle);
+          window.addEventListener("keydown", (e) => {
+            if (e.code === "KeyF") this.onToggle();
+          });
+
+          this.updateMode();
+        },
+        onToggle: function () {
+          this.data.fly = !this.data.fly;
+          this.updateMode();
+        },
+        updateMode: function () {
+          if (!this.rig) return;
+
+          const movement = this.rig.getAttribute("movement-controls") || {};
+
+          if (this.data.fly) {
+            movement.constrainToNavMesh = false;
+            movement.fly = true;
+            this.rig.setAttribute("movement-controls", movement);
+            console.log("Locomotion: FLY mode");
+          } else {
+            movement.constrainToNavMesh = true;
+            movement.fly = false;
+            this.rig.setAttribute("movement-controls", movement);
+            console.log("Locomotion: WALK mode");
+          }
+
+          const label = document.querySelector("#modeLabel");
+          if (label) {
+            label.setAttribute(
+              "value",
+              this.data.fly ? "Mode: Fly (Y/F)" : "Mode: Walk (Y/F)"
+            );
+          }
+        }
+      });
+
+      // --- Kollisions-Logger für Debug ---
+      AFRAME.registerComponent("collision-listener", {
+        init: function () {
+          this.el.addEventListener("collide", (e) => {
+            console.log(
+              "[COLLISION]",
+              this.el.id || this.el.tagName,
+              "mit",
+              e.detail.body.el && (e.detail.body.el.id || e.detail.body.el.tagName)
+            );
+          });
+        }
+      });
+    </script>
+  </head>
+
+  <body>
+    <a-scene physics="debug: true; gravity: 0; restitution: 0.1;" background="color: #AAAAAA">
+      <!-- Assets -->
+      <a-assets>
+        <a-asset-item id="modell"   src="model-6.glb"></a-asset-item>
+        <a-asset-item id="nav-mesh" src="model-6.glb"></a-asset-item>
+      </a-assets>
+
+      <!-- Environment nur optisch -->
+      <a-entity environment="preset: forest; groundColor: #445; grid: cross"></a-entity>
+
+      <!-- NavMesh (nur fürs Laufen, unsichtbar) -->
+      <a-entity id="navMeshEntity"
+                gltf-model="#nav-mesh"
+                nav-mesh
+                position="0 0 0"
+                scale="15 15 15"
+                visible="false"></a-entity>
+
+      <!-- Sichtbares Modell, leicht angehoben -->
+      <a-entity id="level"
+                gltf-model="#modell"
+                position="0 1 0"
+                scale="15 15 15">
+      </a-entity>
+
+      <!-- TEST: Großer BODEN-Collider (sichtbar, damit du ihn siehst) -->
+      <a-plane rotation="-90 0 0"
+               width="40"
+               height="40"
+               position="0 0 0"
+               color="#00FF00"
+               opacity="0.4"
+               class="collision"
+               static-body></a-plane>
+
+      <!-- TEST: Wand-Collider (sichtbar, vor dir) -->
+      <a-box position="0 1 -5"
+             width="6"
+             height="2"
+             depth="0.5"
+             color="#FF0000"
+             opacity="0.4"
+             class="collision"
+             static-body></a-box>
+
+      <!-- Licht -->
+      <a-light type="ambient"
+               color="#FFFFFF"
+               intensity="0.5"></a-light>
+
+      <!-- Camera Rig mit Capsule-Kollision + collision-listener -->
+      <a-entity id="cameraRig"
+                movement-controls="constrainToNavMesh: false; fly: false; speed: 0.1"
+                kinematic-body="radius: 0.3; height: 1.6; offset: 0 0.8 0"
+                navigator="cameraRig: #cameraRig; cameraHead: #head; collisionEntities: .collision; ignoreEntities: .clickable"
+                collision-listener
+                position="0 0 5"
+                rotation="0 0 0">
+
+        <!-- Kopf/Kamera -->
+        <a-entity id="head"
+                  camera
+                  look-controls="pointerLockEnabled: false"
+                  position="0 1.6 0"></a-entity>
+
+        <!-- Linker Controller -->
+        <a-entity id="ctlL"
+                  hand-tracking-controls="hand: left;"
+                  teleport-controls="cameraRig: #cameraRig; teleportOrigin: #head; startEvents: teleportstart; endEvents: teleportend; collisionEntities: .collision"
+                  laser-controls="hand: left"
+                  input-listen
+                  locomotion-mode-toggle
+                  jump-controls="height: 0.2; gravity: -9.8">
+
+          <a-text value="X: Teleport | A: Jump"
+                  position="0 0.05 0"
+                  rotation="-90 0 0"
+                  scale="0.1 0.1 0.1"
+                  align="center"
+                  color="#FFFFFF"></a-text>
+
+          <a-text id="modeLabel"
+                  value="Mode: Walk (Y/F)"
+                  position="0 0.15 0"
+                  rotation="-90 0 0"
+                  scale="0.1 0.1 0.1"
+                  align="center"
+                  color="#00FFAA"></a-text>
+        </a-entity>
+
+        <!-- Rechter Controller -->
+        <a-entity id="ctlR"
+                  hand-tracking-controls="hand: right;"
+                  laser-controls="hand: right"
+                  input-listen>
+          <a-text value="This is your hand!"
+                  position="0 0.05 0"
+                  rotation="-90 0 0"
+                  scale="0.1 0.1 0.1"
+                  align="center"
+                  color="#FFFFFF"></a-text>
+        </a-entity>
+      </a-entity>
+    </a-scene>
+  </body>
+</html>

@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>A-Frame VR Szene mit Ammo-Physik</title>
+
+    <!-- A-Frame -->
+    <script src="https://aframe.io/releases/1.3.0/aframe.min.js"></script>
+
+    <!-- Ammo + Physics-System (Ammo-Treiber) -->
+    <script src="https://cdn.jsdelivr.net/gh/MozillaReality/ammo.js@8bbc0ea/builds/ammo.wasm.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-physics-system@v4.2.4/dist/aframe-physics-system.js"></script>
+
+    <!-- Teleport / NavMesh / Extras / Environment -->
+    <script src="https://rawgit.com/fernandojsg/aframe-teleport-controls/master/dist/aframe-teleport-controls.min.js"></script>
+    <script src="https://recast-api.donmccurdy.com/aframe-inspector-plugin-recast.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/donmccurdy/aframe-extras@v6.1.1/dist/aframe-extras.min.js"></script>
+    <script src="https://unpkg.com/aframe-environment-component@1.3.1/dist/aframe-environment-component.min.js"></script>
+
+    <script>
+      // --- X-Button → Teleportstart/-ende ---
+      AFRAME.registerComponent("input-listen", {
+        init: function () {
+          this.el.addEventListener("xbuttondown", function () {
+            this.emit("teleportstart");
+          });
+
+          this.el.addEventListener("xbuttonup", function () {
+            this.emit("teleportend");
+          });
+        }
+      });
+
+      // --- Jump-Controls: echter Jump über Ammo-Body ---
+      AFRAME.registerComponent("jump-controls", {
+        schema: {
+          height: { default: 1.0 } // "Sprunghöhe" in Metern
+        },
+        init: function () {
+          this.rig = document.querySelector("#cameraRig");
+          this.onJump = this.onJump.bind(this);
+
+          // A-Button (Controller)
+          this.el.addEventListener("abuttondown", this.onJump);
+
+          // Space (Keyboard)
+          window.addEventListener("keydown", (e) => {
+            if (e.code === "Space") this.onJump();
+          });
+        },
+        onJump: function () {
+          if (!this.rig || !this.rig.body || typeof Ammo === "undefined") return;
+
+          const body = this.rig.body;
+          const currentVel = body.getLinearVelocity();
+
+          // nur springen, wenn man ungefähr "am Boden" ist
+          const vy = currentVel.y();
+          if (Math.abs(vy) > 0.2) {
+            return;
+          }
+
+          const g = -9.8;
+          const h = this.data.height;
+          const v0 = Math.sqrt(2 * Math.abs(g) * h);
+
+          const newVel = new Ammo.btVector3(currentVel.x(), v0, currentVel.z());
+          body.setLinearVelocity(newVel);
+          Ammo.destroy(newVel);
+        }
+      });
+
+      // --- Modus-Toggle: aktuell nur Label ---
+      AFRAME.registerComponent("locomotion-mode-toggle", {
+        schema: { fly: { default: false } },
+        init: function () {
+          this.onToggle = this.onToggle.bind(this);
+
+          this.el.addEventListener("ybuttondown", this.onToggle);
+          window.addEventListener("keydown", (e) => {
+            if (e.code === "KeyF") this.onToggle();
+          });
+
+          this.updateMode();
+        },
+        onToggle: function () {
+          this.data.fly = !this.data.fly;
+          this.updateMode();
+        },
+        updateMode: function () {
+          const label = document.querySelector("#modeLabel");
+          if (label) {
+            label.setAttribute(
+              "value",
+              this.data.fly ? "Mode: Fly (Y/F)" : "Mode: Walk (Y/F)"
+            );
+          }
+          console.log("Locomotion mode:", this.data.fly ? "FLY" : "WALK");
+        }
+      });
+
+      // --- Kollisions-Logger für Ammo (collidestart) ---
+      AFRAME.registerComponent("collision-listener", {
+        init: function () {
+          this.el.addEventListener("collidestart", (e) => {
+            console.log(
+              "[COLLISION START]",
+              this.el.id || this.el.tagName,
+              "mit",
+              e.detail.targetEl &&
+                (e.detail.targetEl.id || e.detail.targetEl.tagName)
+            );
+          });
+        }
+      });
+
+      // --- skaliert Geometrie + baut Mesh-Collider (Ammo-Static-Body) ---
+      // WICHTIG: geometry.scale → Physik-Mesh wird korrekt skaliert
+      AFRAME.registerComponent("model-mesh-collider", {
+        schema: { scale: { default: 15 } },
+        init: function () {
+          this.el.addEventListener("model-loaded", () => {
+            const s = this.data.scale;
+            const mesh = this.el.getObject3D("mesh");
+            if (!mesh) return;
+
+            mesh.traverse((node) => {
+              if (node.isMesh && node.geometry) {
+                // Geometrie skalieren (wirkt sich auf Physik-Mesh aus)
+                node.geometry.scale(s, s, s);
+
+                node.castShadow = true;
+                node.receiveShadow = true;
+                if (node.material) node.material.needsUpdate = true;
+              }
+            });
+
+            this.el.setAttribute("ammo-body", { type: "static" });
+            this.el.setAttribute("ammo-shape", {
+              type: "mesh",
+              fit: "all"
+            });
+
+            console.log(
+              "[COLLIDER] static mesh auf Modell gesetzt (scale " + s + ")"
+            );
+          });
+        }
+      });
+
+      // --- Environment bekommt einen statischen Mesh-Collider ---
+      AFRAME.registerComponent("environment-collider", {
+        init: function () {
+          const el = this.el;
+
+          const setupCollider = () => {
+            el.removeEventListener("environment-loaded", setupCollider);
+
+            setTimeout(() => {
+              el.setAttribute("ammo-body", {
+                type: "static",
+                restitution: 0.0,
+                friction: 1.0
+              });
+
+              el.setAttribute("ammo-shape", {
+                type: "mesh",
+                fit: "all"
+              });
+
+              const mesh = el.getObject3D("mesh");
+              if (mesh) {
+                mesh.traverse((node) => {
+                  if (node.isMesh) {
+                    node.receiveShadow = true;
+                    if (node.material) node.material.needsUpdate = true;
+                  }
+                });
+              }
+
+              console.log("[ENV] static mesh collider für Environment gesetzt");
+            }, 0);
+          };
+
+          el.addEventListener("environment-loaded", setupCollider);
+        }
+      });
+
+      // --- WASD + Thumbstick-Steuerung relativ zur Kamerablickrichtung mit Ammo-Body ---
+      // Performance: Ammo.btVector3 wird wiederverwendet statt jedes Frame neu angelegt.
+      AFRAME.registerComponent("player-physics-controls", {
+        schema: {
+          speed: { default: 5 },
+          controller: { type: "selector" } // z.B. #ctlL
+        },
+
+        init: function () {
+          this.keys = {};
+          this.axisX = 0; // Thumbstick X (links/rechts)
+          this.axisY = 0; // Thumbstick Y (vor/zurück)
+
+          this.direction = new THREE.Vector3();
+          this.forward = new THREE.Vector3();
+          this.right = new THREE.Vector3();
+          this.up = new THREE.Vector3(0, 1, 0);
+
+          this.cameraEl =
+            this.el.querySelector("[camera]") ||
+            (this.el.sceneEl &&
+              this.el.sceneEl.camera &&
+              this.el.sceneEl.camera.el);
+
+          // wiederverwendete Ammo-Vektoren
+          this.idleVel = new Ammo.btVector3(0, 0, 0);
+          this.moveVel = new Ammo.btVector3(0, 0, 0);
+
+          // Tastatur (PC)
+          window.addEventListener("keydown", (e) => {
+            this.keys[e.code] = true;
+          });
+          window.addEventListener("keyup", (e) => {
+            this.keys[e.code] = false;
+          });
+
+          // Thumbstick (Controller)
+          this.onThumbstickMove = this.onThumbstickMove.bind(this);
+          if (this.data.controller) {
+            this.data.controller.addEventListener(
+              "thumbstickmoved",
+              this.onThumbstickMove
+            );
+          }
+        },
+
+        update: function (oldData) {
+          // falls controller in HTML geändert wird
+          if (oldData.controller !== this.data.controller) {
+            if (oldData.controller) {
+              oldData.controller.removeEventListener(
+                "thumbstickmoved",
+                this.onThumbstickMove
+              );
+            }
+            if (this.data.controller) {
+              this.data.controller.addEventListener(
+                "thumbstickmoved",
+                this.onThumbstickMove
+              );
+            }
+          }
+        },
+
+        remove: function () {
+          if (this.data.controller) {
+            this.data.controller.removeEventListener(
+              "thumbstickmoved",
+              this.onThumbstickMove
+            );
+          }
+          // Ammo-Vektoren bleiben bis Szenenende im Speicher; das ist ok (2 Stück).
+        },
+
+        onThumbstickMove: function (evt) {
+          // evt.detail = {x, y} im Bereich [-1, 1]
+          this.axisX = evt.detail.x;
+          this.axisY = evt.detail.y;
+        },
+
+        tick: function () {
+          const body = this.el.body;
+          if (!body || typeof Ammo === "undefined") return;
+
+          body.activate();
+
+          const currentVel = body.getLinearVelocity();
+          const vy = currentVel.y();
+
+          // --- Eingaben sammeln ---
+
+          // 1) Tastatur (WASD / Pfeile)
+          let moveX = 0;
+          let moveZ = 0;
+
+          if (this.keys["KeyD"] || this.keys["ArrowRight"]) moveX += 1;
+          if (this.keys["KeyA"] || this.keys["ArrowLeft"]) moveX -= 1;
+          if (this.keys["KeyS"] || this.keys["ArrowDown"]) moveZ += 1;
+          if (this.keys["KeyW"] || this.keys["ArrowUp"]) moveZ -= 1;
+
+          // 2) Thumbstick (Controller)
+          const dead = 0.15; // Deadzone
+          const stickX = Math.abs(this.axisX) > dead ? this.axisX : 0;
+          const stickY = Math.abs(this.axisY) > dead ? this.axisY : 0;
+
+          // X = links/rechts, Y = vor/zurück (Y < 0 = nach vorne bei Quest)
+          moveX += stickX;
+          moveZ += stickY;
+
+          // Wenn keine Eingabe → nur vertikale Geschwindigkeit beibehalten
+          if (Math.abs(moveX) < 0.001 && Math.abs(moveZ) < 0.001) {
+            this.idleVel.setValue(0, vy, 0);
+            body.setLinearVelocity(this.idleVel);
+            return;
+          }
+
+          // --- Richtung aus Kamerablick + Movementvektoren berechnen ---
+
+          if (this.cameraEl && this.cameraEl.object3D) {
+            this.cameraEl.object3D.getWorldDirection(this.forward);
+          } else {
+            const rotation = this.el.getAttribute("rotation") || {
+              x: 0,
+              y: 0,
+              z: 0
+            };
+            const yaw = THREE.MathUtils.degToRad(rotation.y);
+            this.forward
+              .set(0, 0, -1)
+              .applyAxisAngle(this.up, yaw);
+          }
+
+          // nur horizontale Ebene
+          this.forward.y = 0;
+          if (this.forward.lengthSq() > 0) {
+            this.forward.normalize();
+          }
+
+          this.right.copy(this.forward).cross(this.up).negate().normalize();
+
+          this.direction.set(0, 0, 0);
+          this.direction
+            .addScaledVector(this.forward, moveZ)
+            .addScaledVector(this.right, moveX);
+
+          // analoger Stick kann >1 Länge erzeugen → ggf. normalisieren
+          if (this.direction.lengthSq() > 1) {
+            this.direction.normalize();
+          }
+
+          const speed = this.data.speed;
+          const vx = this.direction.x * speed;
+          const vz = this.direction.z * speed;
+
+          this.moveVel.setValue(vx, vy, vz);
+          body.setLinearVelocity(this.moveVel);
+        }
+      });
+
+      // --- Sonne: bewegt sich um die Szene & zielt auf #level ---
+      AFRAME.registerComponent("sun-cycle", {
+        schema: {
+          radius: { default: 60 },
+          speed: { default: 0.02 },
+          height: { default: 100 }
+        },
+        init: function () {
+          this.angle = Math.PI / 4;
+          this.targetEl = document.querySelector("#level");
+          this.targetPos = new THREE.Vector3(0, 0, 0);
+
+          this.el.addEventListener("loaded", () => {
+            const lightObj = this.el.getObject3D("light");
+            if (lightObj && lightObj.shadow && lightObj.shadow.camera) {
+              const cam = lightObj.shadow.camera;
+              cam.left = -40;
+              cam.right = 40;
+              cam.top = 40;
+              cam.bottom = -40;
+              cam.near = 1;
+              cam.far = 150;
+              cam.updateProjectionMatrix();
+              lightObj.shadow.bias = -0.0001;
+              // leichte Performance-Optimierung: 1024x1024 reicht oft
+              lightObj.shadow.mapSize.set(1024, 1024);
+            }
+          });
+        },
+        tick: function (time, dt) {
+          if (!dt) return;
+
+          const data = this.data;
+          this.angle += (dt / 1000) * data.speed;
+
+          const r = data.radius;
+          const x = r * Math.cos(this.angle);
+          const z = r * Math.sin(this.angle);
+          const y = Math.max(20, data.height * Math.sin(this.angle));
+
+          this.el.setAttribute("position", { x, y, z });
+
+          if (this.targetEl && this.targetEl.object3D) {
+            this.targetEl.object3D.getWorldPosition(this.targetPos);
+          } else {
+            this.targetPos.set(0, 0, 0);
+          }
+
+          const lightObj = this.el.getObject3D("light");
+          if (lightObj) {
+            const t = Math.max(0.2, Math.sin(this.angle)); // 0.2–1
+            lightObj.intensity = 0.4 + 0.4 * t;            // 0.4–0.8
+
+            if (lightObj.target) {
+              lightObj.target.position.copy(this.targetPos);
+              lightObj.target.updateMatrixWorld();
+            }
+          }
+        }
+      });
+
+      // --- PHYSICS-DEBUG: toggelt ausschließlich physics.debug (Taste G am PC) ---
+      AFRAME.registerComponent("physics-debug-toggle", {
+        init: function () {
+          const sceneEl = this.el; // direkt an der Szene hängen
+
+          const physData = sceneEl.getAttribute("physics") || {};
+          this.debugOn = !!physData.debug;
+
+          console.log("[PHYSICS-DEBUG] initial:", this.debugOn);
+
+          window.addEventListener("keydown", (e) => {
+            if (e.code === "KeyG") {
+              this.debugOn = !this.debugOn;
+
+              const current = sceneEl.getAttribute("physics") || {};
+              const newData = Object.assign({}, current, { debug: this.debugOn });
+
+              sceneEl.setAttribute("physics", newData);
+
+              console.log("[PHYSICS-DEBUG] toggled ->", this.debugOn);
+            }
+          });
+        }
+      });
+    </script>
+  </head>
+
+  <body>
+    <a-scene
+      physics="driver: ammo; debug: false; debugDrawMode: 1; gravity: -9.8; restitution: 0.0;"
+      background="color: #AAAAAA"
+      shadow="type: pcfsoft"
+      physics-debug-toggle
+    >
+      <!-- Assets -->
+      <a-assets>
+        <a-asset-item id="modell" src="model-6.glb"></a-asset-item>
+        <a-asset-item id="nav-mesh" src="model-6.glb"></a-asset-item>
+        <audio id="birds" src="birds.mp3"></audio>
+      </a-assets>
+
+      <!-- Environment -->
+      <a-entity
+        id="env"
+        environment="preset: forest; groundColor: #445; skyColor: #7788aa; grid: cross; lighting: none"
+        environment-collider
+        shadow="receive: true"
+      ></a-entity>
+
+      <!-- Fallback-Boden -->
+      <a-plane
+        rotation="-90 0 0"
+        width="200"
+        height="200"
+        position="0 0 0"
+        visible="false"
+        shadow="receive: true"
+        ammo-body="type: static"
+        ammo-shape="type: box"
+      ></a-plane>
+
+      <!-- NavMesh (für Teleport, unsichtbar) -->
+      <a-entity
+        id="navMeshEntity"
+        gltf-model="#nav-mesh"
+        nav-mesh
+        position="0 2 0"
+        scale="15 15 15"
+        visible="false"
+      ></a-entity>
+
+      <!-- Sichtbares Modell + echter Mesh-Collider (in der Mitte) -->
+      <a-entity
+        id="level"
+        gltf-model="#modell"
+        position="0 2 0"
+        model-mesh-collider="scale: 15"
+        shadow="cast: true; receive: true"
+      ></a-entity>
+
+      <!-- Ambient Light -->
+      <a-entity
+        light="type: ambient; color: #FFFFFF; intensity: 0.5"
+      ></a-entity>
+
+      <!-- Sonne -->
+      <a-entity
+        id="sun"
+        light="type: directional;
+               color: #fff7e6;
+               intensity: 0.6;
+               castShadow: true;
+               shadowCameraNear: 1;
+               shadowCameraFar: 150;
+               shadowCameraTop: 40;
+               shadowCameraBottom: -40;
+               shadowCameraLeft: -40;
+               shadowCameraRight: 40;
+               shadowMapWidth: 1024;
+               shadowMapHeight: 1024;
+               shadowBias: -0.0001"
+        position="0 50 0"
+        sun-cycle="radius: 60; speed: 0.02; height: 100"
+      ></a-entity>
+
+      <!-- Camera Rig -->
+      <a-entity
+        id="cameraRig"
+        ammo-body="type: dynamic; mass: 1; angularFactor: 0 0 0; linearDamping: 0.2; emitCollisionEvents: true; activationState: disableDeactivation"
+        ammo-shape="type: capsule; fit: manual; halfExtents: 0.3 1 0.3"
+        collision-listener
+        player-physics-controls="speed: 5; controller: #ctlL"
+        position="0 2 20"
+        rotation="0 0 0"
+        restitution="0.0"
+      >
+        <!-- Kopf/Kamera -->
+        <a-entity
+          id="head"
+          camera
+          look-controls="pointerLockEnabled: true"
+          position="0 0.6 0"
+        ></a-entity>
+
+        <!-- Linker Controller -->
+        <a-entity
+          id="ctlL"
+          oculus-touch-controls="hand: left"
+          teleport-controls="cameraRig: #cameraRig; teleportOrigin: #head; startEvents: teleportstart; endEvents: teleportend; navMesh: #navMeshEntity"
+          laser-controls="hand: left"
+          input-listen
+          locomotion-mode-toggle
+          jump-controls="height: 1"
+        >
+          <a-text
+            value="X: Teleport | A: Jump | G: Physics Debug"
+            position="0 0.05 0"
+            rotation="-90 0 0"
+            scale="0.1 0.1 0.1"
+            align="center"
+            color="#FFFFFF"
+          ></a-text>
+
+          <a-text
+            id="modeLabel"
+            value="Mode: Walk (Y/F)"
+            position="0 0.15 0"
+            rotation="-90 0 0"
+            scale="0.1 0.1 0.1"
+            align="center"
+            color="#00FFAA"
+          ></a-text>
+        </a-entity>
+
+        <!-- Rechter Controller -->
+        <a-entity
+          id="ctlR"
+          oculus-touch-controls="hand: right"
+          laser-controls="hand: right"
+          input-listen
+        >
+          <a-text
+            value="This is your hand!"
+            position="0 0.05 0"
+            rotation="-90 0 0"
+            scale="0.1 0.1 0.1"
+            align="center"
+            color="#FFFFFF"
+          ></a-text>
+        </a-entity>
+      </a-entity>
+
+      <!-- Hintergrund-Sound (optional) -->
+      <a-sound
+        src="#birds"
+        autoplay="true"
+        loop="true"
+        position="0 5 0"
+      ></a-sound>
+    </a-scene>
+  </body>
+</html>
