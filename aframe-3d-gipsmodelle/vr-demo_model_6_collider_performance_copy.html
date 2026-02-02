@@ -19,7 +19,7 @@
 
     <script>
       // --------------------------------------------------
-      // Controller Input: X-Button → Teleport Start/Ende
+      // Controller Input: X-Button (LEFT) → Teleport Start/Ende
       // --------------------------------------------------
       AFRAME.registerComponent("input-listen", {
         init: function () {
@@ -33,18 +33,28 @@
       });
 
       // --------------------------------------------------
-      // Jump-Controls (A-Button / Space) über Ammo-Body
+      // RIGHT Controller: A-Button → emit "jump"
+      // --------------------------------------------------
+      AFRAME.registerComponent("right-abutton-jump", {
+        init: function () {
+          this.el.addEventListener("abuttondown", () => {
+            const rig = document.querySelector("#cameraRig");
+            if (rig) rig.emit("jump");
+          });
+        }
+      });
+
+      // --------------------------------------------------
+      // Jump-Controls über Ammo-Body (am RIG, nicht am Controller)
+      // reagiert auf Event "jump" + Space
       // --------------------------------------------------
       AFRAME.registerComponent("jump-controls", {
-        schema: {
-          height: { default: 1.0 } // Sprunghöhe in Metern
-        },
+        schema: { height: { default: 1.0 } },
         init: function () {
-          this.rig = document.querySelector("#cameraRig");
           this.onJump = this.onJump.bind(this);
 
-          // A-Button (Controller)
-          this.el.addEventListener("abuttondown", this.onJump);
+          // von Controller per rig.emit("jump")
+          this.el.addEventListener("jump", this.onJump);
 
           // Space (Keyboard)
           window.addEventListener("keydown", (e) => {
@@ -52,9 +62,10 @@
           });
         },
         onJump: function () {
-          if (!this.rig || !this.rig.body || typeof Ammo === "undefined") return;
+          const rig = this.el;
+          if (!rig || !rig.body || typeof Ammo === "undefined") return;
 
-          const body = this.rig.body;
+          const body = rig.body;
           const currentVel = body.getLinearVelocity();
           const vy = currentVel.y();
 
@@ -102,12 +113,11 @@
       });
 
       // --------------------------------------------------
-      // Simple Kollisions-Log (kannst du bei Bedarf rauswerfen)
+      // Simple Kollisions-Log (optional)
       // --------------------------------------------------
       AFRAME.registerComponent("collision-listener", {
         init: function () {
           this.el.addEventListener("collidestart", (e) => {
-            // Nur 1 Log, kein Spam pro Frame
             console.log(
               "[COLLISION]",
               this.el.id || this.el.tagName,
@@ -132,7 +142,6 @@
 
             mesh.traverse((node) => {
               if (node.isMesh && node.geometry) {
-                // Geometrie skalieren (für Physik + Render)
                 node.geometry.scale(s, s, s);
                 node.castShadow = true;
                 node.receiveShadow = true;
@@ -140,12 +149,8 @@
               }
             });
 
-            // Nur dieses Modell als schweres Mesh für Physik
             this.el.setAttribute("ammo-body", { type: "static" });
-            this.el.setAttribute("ammo-shape", {
-              type: "mesh",
-              fit: "all"
-            });
+            this.el.setAttribute("ammo-shape", { type: "mesh", fit: "all" });
 
             console.log("[COLLIDER] static mesh auf Modell gesetzt (scale " + s + ")");
           });
@@ -153,7 +158,7 @@
       });
 
       // --------------------------------------------------
-      // Player-Steuerung: WASD + Thumbstick über Ammo-Body
+      // Player-Steuerung: WASD + LEFT Thumbstick über Ammo-Body
       // --------------------------------------------------
       AFRAME.registerComponent("player-physics-controls", {
         schema: {
@@ -173,61 +178,52 @@
 
           this.cameraEl =
             this.el.querySelector("[camera]") ||
-            (this.el.sceneEl &&
-              this.el.sceneEl.camera &&
-              this.el.sceneEl.camera.el);
+            (this.el.sceneEl && this.el.sceneEl.camera && this.el.sceneEl.camera.el);
 
-          // wiederverwendete Ammo-Vektoren
           this.idleVel = new Ammo.btVector3(0, 0, 0);
           this.moveVel = new Ammo.btVector3(0, 0, 0);
 
-          // Tastatur
-          window.addEventListener("keydown", (e) => {
-            this.keys[e.code] = true;
-          });
-          window.addEventListener("keyup", (e) => {
-            this.keys[e.code] = false;
-          });
+          window.addEventListener("keydown", (e) => (this.keys[e.code] = true));
+          window.addEventListener("keyup", (e) => (this.keys[e.code] = false));
 
-          // Thumbstick
           this.onThumbstickMove = this.onThumbstickMove.bind(this);
           if (this.data.controller) {
-            this.data.controller.addEventListener(
-              "thumbstickmoved",
-              this.onThumbstickMove
-            );
+            this.data.controller.addEventListener("thumbstickmoved", this.onThumbstickMove);
+            this.data.controller.addEventListener("axismove", this.onThumbstickMove);
           }
         },
 
         update: function (oldData) {
           if (oldData.controller !== this.data.controller) {
             if (oldData.controller) {
-              oldData.controller.removeEventListener(
-                "thumbstickmoved",
-                this.onThumbstickMove
-              );
+              oldData.controller.removeEventListener("thumbstickmoved", this.onThumbstickMove);
+              oldData.controller.removeEventListener("axismove", this.onThumbstickMove);
             }
             if (this.data.controller) {
-              this.data.controller.addEventListener(
-                "thumbstickmoved",
-                this.onThumbstickMove
-              );
+              this.data.controller.addEventListener("thumbstickmoved", this.onThumbstickMove);
+              this.data.controller.addEventListener("axismove", this.onThumbstickMove);
             }
           }
         },
 
         remove: function () {
           if (this.data.controller) {
-            this.data.controller.removeEventListener(
-              "thumbstickmoved",
-              this.onThumbstickMove
-            );
+            this.data.controller.removeEventListener("thumbstickmoved", this.onThumbstickMove);
+            this.data.controller.removeEventListener("axismove", this.onThumbstickMove);
           }
         },
 
         onThumbstickMove: function (evt) {
-          this.axisX = evt.detail.x;
-          this.axisY = evt.detail.y;
+          // thumbstickmoved: {x,y} — axismove kann auch {axis:[...]} haben (je nach lib)
+          if (evt && evt.detail) {
+            if (typeof evt.detail.x === "number" && typeof evt.detail.y === "number") {
+              this.axisX = evt.detail.x;
+              this.axisY = evt.detail.y;
+            } else if (Array.isArray(evt.detail.axis)) {
+              this.axisX = evt.detail.axis[0] || 0;
+              this.axisY = evt.detail.axis[1] || 0;
+            }
+          }
         },
 
         tick: function () {
@@ -239,17 +235,14 @@
           const currentVel = body.getLinearVelocity();
           const vy = currentVel.y();
 
-          // --- Eingaben sammeln ---
           let moveX = 0;
           let moveZ = 0;
 
-          // Tastatur
           if (this.keys["KeyD"] || this.keys["ArrowRight"]) moveX += 1;
           if (this.keys["KeyA"] || this.keys["ArrowLeft"]) moveX -= 1;
           if (this.keys["KeyS"] || this.keys["ArrowDown"]) moveZ += 1;
           if (this.keys["KeyW"] || this.keys["ArrowUp"]) moveZ -= 1;
 
-          // Thumbstick mit Deadzone
           const dead = 0.15;
           const stickX = Math.abs(this.axisX) > dead ? this.axisX : 0;
           const stickY = Math.abs(this.axisY) > dead ? this.axisY : 0;
@@ -257,39 +250,28 @@
           moveX += stickX;
           moveZ += stickY;
 
-          // Keine Eingabe → nur vertikal weiterfallen
           if (Math.abs(moveX) < 0.001 && Math.abs(moveZ) < 0.001) {
             this.idleVel.setValue(0, vy, 0);
             body.setLinearVelocity(this.idleVel);
             return;
           }
 
-          // Richtung aus Kamera
+          // Richtung aus Kamera (Head direction)
           if (this.cameraEl && this.cameraEl.object3D) {
             this.cameraEl.object3D.getWorldDirection(this.forward);
           } else {
-            const rotation = this.el.getAttribute("rotation") || {
-              x: 0,
-              y: 0,
-              z: 0
-            };
+            const rotation = this.el.getAttribute("rotation") || { x: 0, y: 0, z: 0 };
             const yaw = THREE.MathUtils.degToRad(rotation.y);
-            this.forward
-              .set(0, 0, -1)
-              .applyAxisAngle(this.up, yaw);
+            this.forward.set(0, 0, -1).applyAxisAngle(this.up, yaw);
           }
 
-          // nur horizontale Ebene
           this.forward.y = 0;
           if (this.forward.lengthSq() > 0) this.forward.normalize();
 
           this.right.copy(this.forward).cross(this.up).negate().normalize();
 
           this.direction.set(0, 0, 0);
-          this.direction
-            .addScaledVector(this.forward, moveZ)
-            .addScaledVector(this.right, moveX);
-
+          this.direction.addScaledVector(this.forward, moveZ).addScaledVector(this.right, moveX);
           if (this.direction.lengthSq() > 1) this.direction.normalize();
 
           const speed = this.data.speed;
@@ -302,12 +284,103 @@
       });
 
       // --------------------------------------------------
-      // Statische Sonne (kein tick → weniger Overhead)
-      // Wenn du wieder Bewegung willst: eigene sun-cycle-Component reaktivieren
+      // RIGHT Stick Look: Yaw + Pitch (YawRig + PitchRig)
       // --------------------------------------------------
+      AFRAME.registerComponent("right-stick-look", {
+        schema: {
+          controller: { type: "selector" }, // #ctlR
+          yawTarget: { type: "selector" },  // #yawRig
+          pitchTarget: { type: "selector" },// #pitchRig
+          turnSpeed: { default: 110 },      // deg/s (yaw)
+          pitchSpeed: { default: 90 },      // deg/s (pitch)
+          deadzone: { default: 0.2 },
+          pitchMin: { default: -75 },       // deg
+          pitchMax: { default: 75 }         // deg
+        },
+
+        init: function () {
+          this.axisX = 0;
+          this.axisY = 0;
+
+          this.onMove = (e) => {
+            if (!e || !e.detail) return;
+
+            // thumbstickmoved: {x,y}
+            if (typeof e.detail.x === "number" && typeof e.detail.y === "number") {
+              this.axisX = e.detail.x;
+              this.axisY = e.detail.y;
+              return;
+            }
+
+            // axismove: {axis:[x,y,...]}
+            if (Array.isArray(e.detail.axis)) {
+              this.axisX = e.detail.axis[0] || 0;
+              this.axisY = e.detail.axis[1] || 0;
+            }
+          };
+
+          this.bindController = this.bindController.bind(this);
+          this.el.sceneEl.addEventListener("loaded", this.bindController);
+          this.bindController();
+        },
+
+        bindController: function () {
+          const ctl = this.data.controller;
+          if (!ctl) return;
+
+          ctl.removeEventListener("thumbstickmoved", this.onMove);
+          ctl.removeEventListener("axismove", this.onMove);
+
+          ctl.addEventListener("thumbstickmoved", this.onMove);
+          ctl.addEventListener("axismove", this.onMove);
+
+          console.log("[LOOK] bound stick events on", ctl.id || ctl);
+        },
+
+        remove: function () {
+          if (!this.data.controller) return;
+          this.data.controller.removeEventListener("thumbstickmoved", this.onMove);
+          this.data.controller.removeEventListener("axismove", this.onMove);
+        },
+
+        tick: function (t, dt) {
+let x = this.axisX;
+let y = this.axisY;
+
+// S-Kurve: kleine Bewegungen werden viel feiner
+const curve = 2.2; // 1.0 = linear, >2 = feiner um die Mitte
+x = Math.sign(x) * Math.pow(Math.abs(x), curve);
+y = Math.sign(y) * Math.pow(Math.abs(y), curve);
+
+
+          if (Math.abs(x) < this.data.deadzone && Math.abs(y) < this.data.deadzone) return;
+
+          const deltaSec = (dt || 0) / 1000;
+
+          const yawEl = this.data.yawTarget || this.el;
+          const pitchEl = this.data.pitchTarget || this.el;
+
+          // Yaw (links/rechts)
+          if (Math.abs(x) >= this.data.deadzone) {
+            const rotY = yawEl.getAttribute("rotation") || { x: 0, y: 0, z: 0 };
+            rotY.y += (-x) * this.data.turnSpeed * deltaSec;
+            yawEl.setAttribute("rotation", rotY);
+          }
+
+          // Pitch (hoch/runter)
+          if (Math.abs(y) >= this.data.deadzone) {
+            const rotP = pitchEl.getAttribute("rotation") || { x: 0, y: 0, z: 0 };
+            rotP.x += (-y) * this.data.pitchSpeed * deltaSec;
+
+            // clamp
+            rotP.x = Math.max(this.data.pitchMin, Math.min(this.data.pitchMax, rotP.x));
+            pitchEl.setAttribute("rotation", rotP);
+          }
+        }
+      });
 
       // --------------------------------------------------
-      // Physics-Debug-Toggle (nur debug-Flag der Physics-Engine)
+      // Physics-Debug-Toggle
       // --------------------------------------------------
       AFRAME.registerComponent("physics-debug-toggle", {
         init: function () {
@@ -320,12 +393,9 @@
               this.debugOn = !this.debugOn;
 
               const current = sceneEl.getAttribute("physics") || {};
-              const newData = Object.assign({}, current, {
-                debug: this.debugOn
-              });
+              const newData = Object.assign({}, current, { debug: this.debugOn });
 
               sceneEl.setAttribute("physics", newData);
-
               console.log("[PHYSICS-DEBUG] toggled ->", this.debugOn);
             }
           });
@@ -341,22 +411,18 @@
       shadow="type: pcfsoft"
       physics-debug-toggle
     >
-      <!-- Assets -->
       <a-assets>
         <a-asset-item id="modell" src="model-8.glb"></a-asset-item>
-        <!-- selbe Datei auch als NavMesh -->
         <a-asset-item id="nav-mesh" src="model-8.glb"></a-asset-item>
         <audio id="birds" src="birds.mp3"></audio>
       </a-assets>
 
-      <!-- Environment nur visuell (kein Ammo-Collider mehr) -->
       <a-entity
         id="env"
         environment="preset: forest; groundColor: #445; skyColor: #7788aa; grid: cross; lighting: none"
         shadow="receive: true"
       ></a-entity>
 
-      <!-- Einfache Boden-Plane als Fallback -->
       <a-plane
         rotation="-90 0 0"
         width="200"
@@ -368,31 +434,25 @@
         ammo-shape="type: box"
       ></a-plane>
 
-      <!-- NavMesh (für Teleport, unsichtbar) -->
       <a-entity
         id="navMeshEntity"
         gltf-model="#nav-mesh"
         nav-mesh
-        position="0 20 0"
-        scale="0.2 0.2 0.2"
+        position="0 0.15 0"
+        scale="0.1 0.1 0.1"
         visible="false"
       ></a-entity>
 
-      <!-- Sichtbares Modell + echter Mesh-Collider -->
       <a-entity
         id="level"
         gltf-model="#modell"
         position="0 20 0"
-        model-mesh-collider="scale: 0.2"
+        model-mesh-collider="scale: 0.1"
         shadow="cast: true; receive: true"
       ></a-entity>
 
-      <!-- Ambient Light -->
-      <a-entity
-        light="type: ambient; color: #FFFFFF; intensity: 0.5"
-      ></a-entity>
+      <a-entity light="type: ambient; color: #FFFFFF; intensity: 0.5"></a-entity>
 
-      <!-- Statische Sonne (kein sun-cycle mehr → leichter) -->
       <a-entity
         id="sun"
         light="type: directional;
@@ -418,72 +478,47 @@
         ammo-shape="type: capsule; fit: manual; halfExtents: 0.3 1 0.3"
         collision-listener
         player-physics-controls="speed: 5; controller: #ctlL"
+        jump-controls="height: 1.0"
         position="0 50 20"
-        rotation="0 0 0"
       >
-        <!-- Kopf/Kamera -->
-        <a-entity
-          id="head"
-          camera
-          look-controls="pointerLockEnabled: true"
-          position="0 0.6 0"
-        ></a-entity>
+        <!-- Yaw (drehen) -->
+        <a-entity id="yawRig" rotation="0 0 0">
+          <!-- Pitch (hoch/runter) -->
+          <a-entity
+            id="pitchRig"
+            rotation="0 0 0"
+            right-stick-look="controller: #ctlR; yawTarget: #yawRig; pitchTarget: #pitchRig; turnSpeed: 110; pitchSpeed: 50; deadzone: 0.2; pitchMin: -75; pitchMax: 75"
+          >
+            <!-- Kamera -->
+            <a-entity
+              id="head"
+              camera="userHeight: 1.6"
+              look-controls="enabled: true"
+              position="0 0 0"
+            ></a-entity>
 
-        <!-- Linker Controller -->
-        <a-entity
-          id="ctlL"
-          oculus-touch-controls="hand: left"
-          teleport-controls="cameraRig: #cameraRig; teleportOrigin: #head; startEvents: teleportstart; endEvents: teleportend; navMesh: #navMeshEntity"
-          laser-controls="hand: left"
-          input-listen
-          locomotion-mode-toggle
-          jump-controls="height: 1"
-        >
-          <a-text
-            value="X: Teleport | A: Jump | G: Physics Debug"
-            position="0 0.05 0"
-            rotation="-90 0 0"
-            scale="0.1 0.1 0.1"
-            align="center"
-            color="#FFFFFF"
-          ></a-text>
+            <!-- Linker Controller -->
+            <a-entity
+              id="ctlL"
+              oculus-touch-controls="hand: left"
+              teleport-controls="cameraRig: #cameraRig; teleportOrigin: #head; startEvents: teleportstart; endEvents: teleportend; navMesh: #navMeshEntity"
+              laser-controls="hand: left"
+              input-listen
+              locomotion-mode-toggle
+            ></a-entity>
 
-          <a-text
-            id="modeLabel"
-            value="Mode: Walk (Y/F)"
-            position="0 0.15 0"
-            rotation="-90 0 0"
-            scale="0.1 0.1 0.1"
-            align="center"
-            color="#00FFAA"
-          ></a-text>
-        </a-entity>
-
-        <!-- Rechter Controller -->
-        <a-entity
-          id="ctlR"
-          oculus-touch-controls="hand: right"
-          laser-controls="hand: right"
-          input-listen
-        >
-          <a-text
-            value="This is your hand!"
-            position="0 0.05 0"
-            rotation="-90 0 0"
-            scale="0.1 0.1 0.1"
-            align="center"
-            color="#FFFFFF"
-          ></a-text>
+            <!-- Rechter Controller -->
+            <a-entity
+              id="ctlR"
+              oculus-touch-controls="hand: right"
+              laser-controls="hand: right"
+              right-abutton-jump
+            ></a-entity>
+          </a-entity>
         </a-entity>
       </a-entity>
 
-      <!-- Hintergrund-Sound -->
-      <a-sound
-        src="#birds"
-        autoplay="true"
-        loop="true"
-        position="0 5 0"
-      ></a-sound>
+      <a-sound src="#birds" autoplay="true" loop="true" position="0 5 0"></a-sound>
     </a-scene>
   </body>
 </html>
