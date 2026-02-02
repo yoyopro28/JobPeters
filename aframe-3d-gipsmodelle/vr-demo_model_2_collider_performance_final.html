@@ -19,7 +19,6 @@
 
     <script>
       AFRAME.registerComponent("sun-cycle", {
-        
   schema: {
     light: { type: "selector" },     // dein #sun
     target: { type: "selector" },    // z.B. #level oder #cameraRig
@@ -34,7 +33,6 @@
   },
 
   tick(t) {
-    
     const lightEl = this.data.light;
     if (!lightEl) return;
 
@@ -515,9 +513,9 @@ tick: function (t, dt) {
      sun-cycle="light: #sun; target: #level; daySeconds: 180; radius: 140"
       physics="driver: ammo; debug: false; debugDrawMode: 1; gravity: -9.8; restitution: 0.1;"
       background="color: #AAAAAA"
-      shadow="type: basic"
+      shadow="type: pcfsoft"
       renderer="colorManagement: true; toneMapping: ACESFilmic; exposure: 0.8; dither: true;"
-      xr-quality="foveation: 0.8; scale: 0.5"
+      xr-quality="foveation: 0; scale: 1.0"
       
       physics-debug-toggle
     >
@@ -565,9 +563,8 @@ tick: function (t, dt) {
 <a-entity light="type: hemisphere; intensity: 0.55; color: #ffffff; groundColor: #3a3a3a"></a-entity>
 
 <a-entity id="sun"
-  light="type: directional; castShadow: true;
-         shadowMapWidth: 512; shadowMapHeight: 512;
-         shadowBias: -0.0005; shadowRadius: 1"
+  light="type: directional; intensity: 0.9; color: #fff3df; castShadow: true;
+         shadowMapWidth: 1024; shadowMapHeight: 1024; shadowBias: -0.0002"
   position="40 80 -40">
 </a-entity>
 
