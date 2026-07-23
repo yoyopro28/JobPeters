@@ -1,0 +1,28 @@
+# Local secrets and development certificates
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.pfx
+
+# Editor and operating-system files
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Local copies and exported archives
+* - Kopie/
+*.zip
+
+# Blender backup files
+*.blend[0-9]
+
+# Local browser-test artifacts
+.playwright-cli/
+output/playwright/
